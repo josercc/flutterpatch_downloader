@@ -1,3 +1,9 @@
-
 # FVM Version Cache
 .fvm/
+
+# macOS
+.DS_Store
+
+# Dart / Flutter
+.dart_tool/
+pubspec.lock

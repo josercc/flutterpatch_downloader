@@ -1,0 +1,49 @@
+# Publish to pub.dev when a version tag is pushed.
+#
+# Prerequisites (one-time):
+# 1. Remove `publish_to: none` and replace path deps with hosted versions.
+# 2. Manually publish the first version once: `dart pub publish`
+# 3. On pub.dev → package Admin → Automated publishing:
+#      Repository: josercc/flutterpatch_downloader
+#      Tag pattern: v{{version}}
+# 4. Ensure pubspec.yaml `version` matches the tag (e.g. tag v0.1.1 → version: 0.1.1)
+#
+# Usage:
+#   git tag v0.1.1 && git push origin v0.1.1
+
+name: Publish to pub.dev
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required for pub.dev OIDC
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Provisions the GitHub OIDC token that pub.dev trusted publishing uses.
+      - name: Set up Dart (OIDC)
+        uses: dart-lang/setup-dart@v1
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Dry-run
+        run: dart pub publish --dry-run
+
+      - name: Publish
+        run: dart pub publish --force

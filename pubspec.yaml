@@ -12,11 +12,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  hot_asset_gen:
-    path: packages/hot_asset_gen
+  hot_asset_gen: ^0.1.0
   http: ^1.2.2
-  ota_protocol:
-    path: ../meta_ota_cli/packages/ota_protocol
+  ota_protocol: ^0.1.0
   package_info_plus: ^8.3.0
   shorebird_code_push: ^2.0.3
 
