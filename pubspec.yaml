@@ -3,7 +3,8 @@ description: >
   Umbrella client for Meta OTA — resource hot-update + Shorebird code push
   behind one init/wrap/sync API.
 version: 0.1.0
-publish_to: none
+homepage: https://github.com/josercc/flutterpatch_downloader
+repository: https://github.com/josercc/flutterpatch_downloader
 
 environment:
   sdk: ^3.5.0
