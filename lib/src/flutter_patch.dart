@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:hot_asset_gen/hot_asset_gen.dart';
 import 'package:http/http.dart' as http;
@@ -21,6 +22,9 @@ import 'flutter_patch_sync_result.dart';
 ///
 /// Allowlist: server returns `unique_ids` on check; **this client** decides
 /// whether to download (empty list = everyone).
+///
+/// Prefer [load] / [resolveFile] over `rootBundle` for audio, share images,
+/// and similar non-`Image.asset` call sites so hot resources are visible.
 class FlutterPatch {
   FlutterPatch._();
 
@@ -56,6 +60,17 @@ class FlutterPatch {
   static int get resourcePackNumber => HotAssets.packNumber;
 
   static int get resourceTableCount => HotAssets.tableCount;
+
+  /// [HotAssetBundle] installed by [init] / [wrap]. Prefers the local resource
+  /// table, otherwise the parent (usually [rootBundle]).
+  static AssetBundle get assetBundle => HotAssets.bundle;
+
+  /// Load asset bytes via [assetBundle] — drop-in for `rootBundle.load`.
+  static Future<ByteData> load(String key) => HotAssets.bundle.load(key);
+
+  /// On-disk file for a hot-updated asset key, or `null` if not in the table.
+  /// Use with `VideoPlayerController.file` / similar file-based APIs.
+  static File? resolveFile(String key) => HotAssets.registry.resolveFile(key);
 
   @visibleForTesting
   static set updater(ShorebirdUpdater value) => _updater = value;
