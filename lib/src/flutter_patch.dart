@@ -7,8 +7,10 @@ import 'package:hot_asset_gen/hot_asset_gen.dart';
 import 'package:http/http.dart' as http;
 import 'package:ota_protocol/ota_protocol.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:path/path.dart' as p;
 import 'package:shorebird_code_push/shorebird_code_push.dart';
 
+import 'flutter_patch_asset_image.dart';
 import 'flutter_patch_config.dart';
 import 'flutter_patch_sync_result.dart';
 
@@ -18,15 +20,22 @@ import 'flutter_patch_sync_result.dart';
 /// runApp(await FlutterPatch.bootstrap(const MyApp(), appPackage: 'my_app'));
 /// FlutterPatch.setUniqueId(id); // when you have it
 /// await FlutterPatch.sync();    // when you have network
+///
+/// // Non-Image.asset call sites — no hot/miss branching:
+/// final bytes = await FlutterPatch.loadBytes(key);
+/// final file = await FlutterPatch.file(key);
 /// ```
 ///
-/// Allowlist: server returns `unique_ids` on check; **this client** decides
-/// whether to download (empty list = everyone).
+/// Whitelist is **server-side** (`whitelist_enabled` + `unique_ids`).
+/// [setUniqueId] is sent as check `client_id` so the server can gate downloads.
+/// When Meta OTA returns `patch_available: false`, this client skips Shorebird.
 ///
-/// Prefer [load] / [resolveFile] over `rootBundle` for audio, share images,
-/// and similar non-`Image.asset` call sites so hot resources are visible.
+/// Prefer [load] / [loadBytes] / [file] over `rootBundle` for audio, share
+/// images, video file APIs, and similar non-`Image.asset` call sites.
 class FlutterPatch {
   FlutterPatch._();
+
+  static const _bundleCacheDirName = '.bundle_cache';
 
   static FlutterPatchConfig? _config;
   static String? _appPackage;
@@ -46,11 +55,11 @@ class FlutterPatch {
   static bool get isInitialized => _config != null && HotAssets.isInitialized;
 
   static String get appPackage {
-    final p = _appPackage;
-    if (p == null) {
+    final pkg = _appPackage;
+    if (pkg == null) {
       throw StateError('FlutterPatch.bootstrap() / init() must be called first');
     }
-    return p;
+    return pkg;
   }
 
   static String? get uniqueId => _uniqueId;
@@ -66,11 +75,151 @@ class FlutterPatch {
   static AssetBundle get assetBundle => HotAssets.bundle;
 
   /// Load asset bytes via [assetBundle] — drop-in for `rootBundle.load`.
+  ///
+  /// Always succeeds for packaged keys: hot table first, then the APK/IPA
+  /// asset bundle. No caller-side hot/miss check.
   static Future<ByteData> load(String key) => HotAssets.bundle.load(key);
 
-  /// On-disk file for a hot-updated asset key, or `null` if not in the table.
-  /// Use with `VideoPlayerController.file` / similar file-based APIs.
+  /// Same as [load], as [Uint8List]. Prefer this for audio / share / custom IO.
+  static Future<Uint8List> loadBytes(String key) async {
+    final data = await load(key);
+    return data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+  }
+
+  /// Always returns an on-disk [File] for [key] — no null / branching.
+  ///
+  /// 1. Hot resource table hit → that file  
+  /// 2. Otherwise extract from [assetBundle] into a local cache once  
+  ///
+  /// Use with `VideoPlayerController.file` / players that need a path.
+  static Future<File> file(String key) async {
+    if (!isInitialized) {
+      throw StateError('FlutterPatch.bootstrap() / init() must be called first');
+    }
+
+    final hot = HotAssets.registry.resolveFile(key);
+    if (hot != null) return hot;
+
+    final bytes = await loadBytes(key);
+    final out = _bundleCacheFile(key);
+    out.parent.createSync(recursive: true);
+    if (!out.existsSync() || out.lengthSync() != bytes.length) {
+      await out.writeAsBytes(bytes, flush: true);
+    }
+    return out;
+  }
+
+  /// Hot-updated on-disk file only, or `null` if not in the table.
+  ///
+  /// Prefer [file] unless you explicitly need “hot only”.
   static File? resolveFile(String key) => HotAssets.registry.resolveFile(key);
+
+  /// Hot-aware [ImageProvider]: local OTA file first, else package [AssetImage].
+  ///
+  /// Drop-in for `AssetImage` / `Image.asset` call sites that must show
+  /// brand-new hot keys not present in the binary [AssetManifest].
+  ///
+  /// FlutterGen: `FlutterPatch.assetImage(Assets.images.foo.path)`.
+  static ImageProvider assetImage(
+    String assetName, {
+    AssetBundle? bundle,
+    String? package,
+    double? scale,
+  }) {
+    if (scale != null) {
+      return FlutterPatchExactAssetImage(
+        assetName,
+        bundle: bundle,
+        package: package,
+        scale: scale,
+      );
+    }
+    return FlutterPatchAssetImage(
+      assetName,
+      bundle: bundle,
+      package: package,
+    );
+  }
+
+  /// Hot-aware [Image] from an asset path — portable across apps (no WinnerImage).
+  ///
+  /// FlutterGen（无法用扩展覆盖已有的 [AssetGenImage.image]，请用 `.patchImage` /
+  /// `.path.flutterPatchImage`）:
+  /// ```dart
+  /// Assets.images.foo.patchImage(package: 'my_pkg', width: 24);
+  /// FlutterPatch.image(Assets.images.foo.path, package: 'my_pkg', width: 24);
+  /// ```
+  static Image image(
+    String assetName, {
+    Key? key,
+    AssetBundle? bundle,
+    String? package,
+    double? scale,
+    double? width,
+    double? height,
+    BoxFit? fit,
+    AlignmentGeometry alignment = Alignment.center,
+    ImageRepeat repeat = ImageRepeat.noRepeat,
+    Color? color,
+    BlendMode? colorBlendMode,
+    FilterQuality filterQuality = FilterQuality.medium,
+    bool gaplessPlayback = true,
+    bool excludeFromSemantics = false,
+    String? semanticLabel,
+    bool matchTextDirection = false,
+    bool isAntiAlias = false,
+    Animation<double>? opacity,
+    Rect? centerSlice,
+    int? cacheWidth,
+    int? cacheHeight,
+    ImageFrameBuilder? frameBuilder,
+    ImageErrorWidgetBuilder? errorBuilder,
+    ImageLoadingBuilder? loadingBuilder,
+  }) {
+    ImageProvider provider = assetImage(
+      assetName,
+      bundle: bundle,
+      package: package,
+      scale: scale,
+    );
+    if (cacheWidth != null || cacheHeight != null) {
+      provider = ResizeImage(
+        provider,
+        width: cacheWidth,
+        height: cacheHeight,
+      );
+    }
+    return Image(
+      image: provider,
+      key: key,
+      width: width,
+      height: height,
+      fit: fit,
+      alignment: alignment,
+      repeat: repeat,
+      color: color,
+      colorBlendMode: colorBlendMode,
+      filterQuality: filterQuality,
+      gaplessPlayback: gaplessPlayback,
+      excludeFromSemantics: excludeFromSemantics,
+      semanticLabel: semanticLabel,
+      matchTextDirection: matchTextDirection,
+      isAntiAlias: isAntiAlias,
+      opacity: opacity,
+      centerSlice: centerSlice,
+      frameBuilder: frameBuilder,
+      errorBuilder: errorBuilder,
+      loadingBuilder: loadingBuilder,
+    );
+  }
+
+  static File _bundleCacheFile(String key) {
+    final digest = base64Url.encode(utf8.encode(key)).replaceAll('=', '');
+    final ext = p.extension(key);
+    return File(
+      p.join(HotAssets.registry.rootDir, _bundleCacheDirName, '$digest$ext'),
+    );
+  }
 
   @visibleForTesting
   static set updater(ShorebirdUpdater value) => _updater = value;
@@ -121,13 +270,17 @@ class FlutterPatch {
     _uniqueId = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
   }
 
-  /// Empty / null [allowlist] → allowed. Non-empty → [localId] must be listed.
+  /// Defense-in-depth after server whitelist. Empty / null [allowlist] → allowed.
+  /// Non-empty → [localId] (or [uniqueId]) must be listed.
   static bool isAllowlistHit(List<String>? allowlist, [String? localId]) {
     if (allowlist == null || allowlist.isEmpty) return true;
     final id = (localId ?? _uniqueId ?? '').trim();
     if (id.isEmpty) return false;
     return allowlist.contains(id);
   }
+
+  /// Gray-release id for Meta OTA check `client_id` (may be empty if unset).
+  static String get _checkClientId => (_uniqueId ?? '').trim();
 
   static Widget wrap(Widget child) => HotAssets.wrap(child);
 
@@ -147,7 +300,7 @@ class FlutterPatch {
     }
   }
 
-  /// Sync when **you** have network. Uses [setUniqueId] for client-side filter.
+  /// Sync when **you** have network. Sends [uniqueId] as check `client_id`.
   static Future<FlutterPatchSyncResult> sync({
     bool resources = true,
     bool code = true,
@@ -162,6 +315,7 @@ class FlutterPatch {
 
     final version = releaseVersion ?? await resolveReleaseVersion();
     final ch = channel ?? config.channel;
+    final checkClientId = _checkClientId;
 
     HotAssetSyncResult? resourceResult;
     if (resources) {
@@ -170,7 +324,7 @@ class FlutterPatch {
         appId: config.appId,
         releaseVersion: version,
         channel: ch,
-        clientId: 'flutterpatch',
+        clientId: checkClientId.isEmpty ? 'flutterpatch' : checkClientId,
         uniqueId: _uniqueId,
         onLog: onLog,
       );
@@ -228,12 +382,24 @@ class FlutterPatch {
     required String channel,
     void Function(String)? onLog,
   }) async {
-    // Check first; apply unique_ids filter on the client before Shorebird download.
+    // Meta OTA preflight (server whitelist). Gate Shorebird on patch_available.
     final preflight = await _checkPatch(
       releaseVersion: releaseVersion,
       channel: channel,
       onLog: onLog,
     );
+    if (preflight != null && !preflight.patchAvailable) {
+      onLog?.call(
+        'Code patch not available from Meta OTA '
+        '(whitelist / no newer patch) — skip Shorebird download',
+      );
+      final current = await readCurrentPatch();
+      return FlutterPatchCodeResult(
+        status: UpdateStatus.upToDate,
+        currentPatchNumber: current,
+        downloaded: false,
+      );
+    }
     if (preflight != null && preflight.patchAvailable) {
       final ids = preflight.patch?.uniqueIds;
       if (!isAllowlistHit(ids)) {
@@ -284,13 +450,15 @@ class FlutterPatch {
     final arch =
         (Platform.isAndroid || Platform.isIOS) ? 'aarch64' : 'x86_64';
     final current = await readCurrentPatch();
+    // Server whitelist matches this against patches.unique_ids.
+    final clientId = _checkClientId;
     final req = PatchCheckRequest(
       appId: config.appId,
       channel: channel,
       releaseVersion: releaseVersion,
       platform: platform,
       arch: arch,
-      clientId: 'flutterpatch',
+      clientId: clientId,
       currentPatchNumber: current,
     );
     try {
