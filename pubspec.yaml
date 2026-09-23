@@ -2,7 +2,7 @@ name: flutterpatch
 description: >
   Umbrella client for Meta OTA — resource hot-update + Shorebird code push
   behind one init/wrap/sync API.
-version: 0.1.2
+version: 0.1.3
 homepage: https://github.com/josercc/flutterpatch_downloader
 repository: https://github.com/josercc/flutterpatch_downloader
 
@@ -13,9 +13,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  hot_asset_gen: ^0.1.0
+  hot_asset_gen: ^0.1.1
   http: ^1.2.2
-  ota_protocol: ^0.1.0
+  ota_protocol: ^0.1.1
   package_info_plus: ^8.3.0
   path: ^1.9.0
   shorebird_code_push: ^2.0.3

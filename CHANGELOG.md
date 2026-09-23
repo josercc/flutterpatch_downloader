@@ -1,3 +1,13 @@
+## 0.1.3
+
+- Per-patch resource tables: `sync` resolves target patch via `patches/check`, then
+  syncs that patch's resource pack (`patch_number` + `config_fingerprint`).
+- `init` passes `releaseVersion` into `HotAssets.init` so upgrading the binary
+  (e.g. `1.0.0+1` → `1.0.0+2`) drops a stale local resource table.
+- Sync result exposes `targetPatchNumber`, `updateAvailable`, and
+  `FlutterPatchCodeResult.outdated` / `nextPatchNumber` / `hasResourceChanges`.
+- Depends on `hot_asset_gen` ^0.1.1 and `ota_protocol` ^0.1.1.
+
 ## 0.1.2
 
 - Add `FlutterPatch.image` + `String.flutterPatchImage` / `flutterPatchImageProvider` for path-based (FlutterGen-friendly) hot images — no app-specific widgets required. Supports `package` / `cacheWidth` / `cacheHeight` (aligns with FlutterGen `AssetGenImage.image`).
