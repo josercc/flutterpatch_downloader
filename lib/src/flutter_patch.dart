@@ -26,9 +26,11 @@ import 'flutter_patch_sync_result.dart';
 /// final file = await FlutterPatch.file(key);
 /// ```
 ///
-/// Whitelist is **server-side** (`whitelist_enabled` + `unique_ids`).
-/// [setUniqueId] is sent as check `client_id` so the server can gate downloads.
-/// When Meta OTA returns `patch_available: false`, this client skips Shorebird.
+/// Whitelist is **client-side**: server always returns available patches;
+/// [setUniqueId] + patch `unique_ids` decide whether this device downloads.
+/// - `unique_ids` omitted / null → everyone
+/// - `unique_ids: []` → block all (whitelist on, empty list)
+/// - non-empty → only listed ids (typically business uid via [setUniqueId])
 ///
 /// Prefer [load] / [loadBytes] / [file] over `rootBundle` for audio, share
 /// images, video file APIs, and similar non-`Image.asset` call sites.
@@ -270,16 +272,21 @@ class FlutterPatch {
     _uniqueId = (trimmed == null || trimmed.isEmpty) ? null : trimmed;
   }
 
-  /// Defense-in-depth after server whitelist. Empty / null [allowlist] → allowed.
-  /// Non-empty → [localId] (or [uniqueId]) must be listed.
+  /// Client-side gray-release gate from patch/resource `unique_ids`.
+  ///
+  /// - `null` (field omitted / whitelist off) → allowed
+  /// - empty list (whitelist on, no ids) → blocked
+  /// - non-empty → [localId] (or [uniqueId]) must be listed
   static bool isAllowlistHit(List<String>? allowlist, [String? localId]) {
-    if (allowlist == null || allowlist.isEmpty) return true;
+    if (allowlist == null) return true;
+    if (allowlist.isEmpty) return false;
     final id = (localId ?? _uniqueId ?? '').trim();
     if (id.isEmpty) return false;
     return allowlist.contains(id);
   }
 
-  /// Gray-release id for Meta OTA check `client_id` (may be empty if unset).
+  /// Optional id sent as check `client_id` (analytics / signed URL); not used
+  /// by the server for whitelist gating.
   static String get _checkClientId => (_uniqueId ?? '').trim();
 
   static Widget wrap(Widget child) => HotAssets.wrap(child);
@@ -300,7 +307,7 @@ class FlutterPatch {
     }
   }
 
-  /// Sync when **you** have network. Sends [uniqueId] as check `client_id`.
+  /// Sync when **you** have network. Client applies [uniqueId] gray-release.
   static Future<FlutterPatchSyncResult> sync({
     bool resources = true,
     bool code = true,
@@ -382,7 +389,7 @@ class FlutterPatch {
     required String channel,
     void Function(String)? onLog,
   }) async {
-    // Meta OTA preflight (server whitelist). Gate Shorebird on patch_available.
+    // Meta OTA preflight: is a newer patch published? Whitelist is client-side.
     final preflight = await _checkPatch(
       releaseVersion: releaseVersion,
       channel: channel,
@@ -391,7 +398,7 @@ class FlutterPatch {
     if (preflight != null && !preflight.patchAvailable) {
       onLog?.call(
         'Code patch not available from Meta OTA '
-        '(whitelist / no newer patch) — skip Shorebird download',
+        '(no newer patch) — skip Shorebird download',
       );
       final current = await readCurrentPatch();
       return FlutterPatchCodeResult(
@@ -450,7 +457,7 @@ class FlutterPatch {
     final arch =
         (Platform.isAndroid || Platform.isIOS) ? 'aarch64' : 'x86_64';
     final current = await readCurrentPatch();
-    // Server whitelist matches this against patches.unique_ids.
+    // client_id is opaque to the server for allowlisting; used for signed URLs.
     final clientId = _checkClientId;
     final req = PatchCheckRequest(
       appId: config.appId,

@@ -51,16 +51,17 @@ FlutterPatch.resolveFile(key);
 
 ### uniqueId / 白名单
 
-`setUniqueId` 会作为 `POST /api/v1/patches/check` 的 **`client_id`** 发给服务端。
-白名单由服务端判定（`whitelist_enabled` + `unique_ids`）：
+`setUniqueId`（通常为业务 **用户 uid**）用于客户端灰度；也会作为 check 的 `client_id`（签名 URL / 事件），**服务端不据此拦截下载**。
 
-| `whitelist_enabled` | `unique_ids` | 结果 |
-|---------------------|--------------|------|
-| `false` | 任意 | 全员可下 |
-| `true` | 空 | 全员不可下（`patch_available: false`） |
-| `true` | 非空 | 仅 `client_id` 命中可下 |
+白名单由**客户端**根据 check 响应里的 `unique_ids` 判定：
 
-客户端在 `patch_available: false` 时 **不会** 再走 Shorebird 下载。
+| 服务端 `whitelist_enabled` | 响应 `unique_ids` | 客户端结果 |
+|----------------------------|-------------------|------------|
+| `false` | 省略 | 全员可下 |
+| `true` | `[]` | 全员跳过 |
+| `true` | 非空 | 仅 `setUniqueId` 命中可下 |
+
+未命中时客户端 **不会** 再走 Shorebird `update()`。
 
 ### Network
 
