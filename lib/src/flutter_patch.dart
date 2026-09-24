@@ -72,6 +72,10 @@ class FlutterPatch {
 
   static int get resourceTableCount => HotAssets.tableCount;
 
+  static int? get resourcePatchNumber => HotAssets.patchNumber;
+
+  static String? get resourceConfigFingerprint => HotAssets.configFingerprint;
+
   /// [HotAssetBundle] installed by [init] / [wrap]. Prefers the local resource
   /// table, otherwise the parent (usually [rootBundle]).
   static AssetBundle get assetBundle => HotAssets.bundle;
@@ -257,9 +261,13 @@ class FlutterPatch {
           assetPath: shorebirdYamlAsset,
           channel: channel,
         );
+    // Resolve release version before loading the local table so a newer
+    // binary (e.g. 1.0.0+2) does not reuse a stale 1.0.0+1 config.
+    final version = await resolveReleaseVersion();
     await HotAssets.init(
       appPackage: appPackage,
       appId: _config!.appId,
+      releaseVersion: version,
     );
   }
 
@@ -308,6 +316,9 @@ class FlutterPatch {
   }
 
   /// Sync when **you** have network. Client applies [uniqueId] gray-release.
+  ///
+  /// Order: locate target Dart patch number → sync that patch's resource table
+  /// → download code patch (if any).
   static Future<FlutterPatchSyncResult> sync({
     bool resources = true,
     bool code = true,
@@ -324,6 +335,22 @@ class FlutterPatch {
     final ch = channel ?? config.channel;
     final checkClientId = _checkClientId;
 
+    final preflight = await _checkPatch(
+      releaseVersion: version,
+      channel: ch,
+      onLog: onLog,
+    );
+
+    final currentPatch = await readCurrentPatch();
+    // Prefer the upcoming patch number when a newer patch is available so
+    // resources for that patch download together with the code update.
+    int? targetPatchNumber = currentPatch;
+    if (preflight != null &&
+        preflight.patchAvailable &&
+        preflight.patch != null) {
+      targetPatchNumber = preflight.patch!.number;
+    }
+
     HotAssetSyncResult? resourceResult;
     if (resources) {
       resourceResult = await HotAssets.sync(
@@ -333,6 +360,8 @@ class FlutterPatch {
         channel: ch,
         clientId: checkClientId.isEmpty ? 'flutterpatch' : checkClientId,
         uniqueId: _uniqueId,
+        patchNumber: targetPatchNumber,
+        platform: _platformName,
         onLog: onLog,
       );
       onLog?.call(resourceResult.message);
@@ -344,6 +373,7 @@ class FlutterPatch {
         download: downloadCode,
         releaseVersion: version,
         channel: ch,
+        preflight: preflight,
         onLog: onLog,
       );
     }
@@ -352,22 +382,34 @@ class FlutterPatch {
       resources: resourceResult,
       code: codeResult,
       releaseVersion: version,
+      targetPatchNumber: targetPatchNumber,
     );
   }
+
+  static String get _platformName =>
+      Platform.isIOS ? 'ios' : (Platform.isAndroid ? 'android' : 'unknown');
 
   static Future<HotAssetSyncResult> syncResources({
     String? releaseVersion,
     String? channel,
+    int? patchNumber,
     void Function(String)? onLog,
   }) async {
-    final result = await sync(
-      resources: true,
-      code: false,
-      releaseVersion: releaseVersion,
-      channel: channel,
+    final version = releaseVersion ?? await resolveReleaseVersion();
+    final ch = channel ?? config.channel;
+    final checkClientId = _checkClientId;
+    final pn = patchNumber ?? await readCurrentPatch();
+    return HotAssets.sync(
+      baseUrl: config.baseUrl,
+      appId: config.appId,
+      releaseVersion: version,
+      channel: ch,
+      clientId: checkClientId.isEmpty ? 'flutterpatch' : checkClientId,
+      uniqueId: _uniqueId,
+      patchNumber: pn,
+      platform: _platformName,
       onLog: onLog,
     );
-    return result.resources!;
   }
 
   static Future<FlutterPatchCodeResult> syncCode({
@@ -387,15 +429,17 @@ class FlutterPatch {
     required bool download,
     required String releaseVersion,
     required String channel,
+    PatchCheckResponse? preflight,
     void Function(String)? onLog,
   }) async {
     // Meta OTA preflight: is a newer patch published? Whitelist is client-side.
-    final preflight = await _checkPatch(
-      releaseVersion: releaseVersion,
-      channel: channel,
-      onLog: onLog,
-    );
-    if (preflight != null && !preflight.patchAvailable) {
+    final check = preflight ??
+        await _checkPatch(
+          releaseVersion: releaseVersion,
+          channel: channel,
+          onLog: onLog,
+        );
+    if (check != null && !check.patchAvailable) {
       onLog?.call(
         'Code patch not available from Meta OTA '
         '(no newer patch) — skip Shorebird download',
@@ -405,10 +449,12 @@ class FlutterPatch {
         status: UpdateStatus.upToDate,
         currentPatchNumber: current,
         downloaded: false,
+        nextPatchNumber: check.patch?.number,
+        hasResourceChanges: check.patch?.hasResourceChanges,
       );
     }
-    if (preflight != null && preflight.patchAvailable) {
-      final ids = preflight.patch?.uniqueIds;
+    if (check != null && check.patchAvailable) {
+      final ids = check.patch?.uniqueIds;
       if (!isAllowlistHit(ids)) {
         onLog?.call('Code patch available but uniqueId miss — skip download');
         final current = await readCurrentPatch();
@@ -416,6 +462,8 @@ class FlutterPatch {
           status: UpdateStatus.upToDate,
           currentPatchNumber: current,
           downloaded: false,
+          nextPatchNumber: check.patch?.number,
+          hasResourceChanges: check.patch?.hasResourceChanges,
         );
       }
     }
@@ -437,12 +485,16 @@ class FlutterPatch {
         status: downloaded ? UpdateStatus.restartRequired : status,
         currentPatchNumber: current,
         downloaded: downloaded,
+        nextPatchNumber: check?.patch?.number,
+        hasResourceChanges: check?.patch?.hasResourceChanges,
       );
     } catch (e) {
       onLog?.call('Shorebird unavailable (need shorebird release build): $e');
       return FlutterPatchCodeResult(
         status: UpdateStatus.unavailable,
         error: e,
+        nextPatchNumber: check?.patch?.number,
+        hasResourceChanges: check?.patch?.hasResourceChanges,
       );
     }
   }
@@ -452,8 +504,7 @@ class FlutterPatch {
     required String channel,
     void Function(String)? onLog,
   }) async {
-    final platform =
-        Platform.isIOS ? 'ios' : (Platform.isAndroid ? 'android' : 'unknown');
+    final platform = _platformName;
     final arch =
         (Platform.isAndroid || Platform.isIOS) ? 'aarch64' : 'x86_64';
     final current = await readCurrentPatch();
