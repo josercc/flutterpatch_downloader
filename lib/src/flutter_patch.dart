@@ -378,11 +378,13 @@ class FlutterPatch {
       );
     }
 
+    final forceUpdate = preflight?.patch?.forceUpdate ?? false;
     return FlutterPatchSyncResult(
       resources: resourceResult,
       code: codeResult,
       releaseVersion: version,
       targetPatchNumber: targetPatchNumber,
+      forceUpdate: forceUpdate,
     );
   }
 
@@ -439,6 +441,7 @@ class FlutterPatch {
           channel: channel,
           onLog: onLog,
         );
+    final forceUpdate = check?.patch?.forceUpdate ?? false;
     if (check != null && !check.patchAvailable) {
       onLog?.call(
         'Code patch not available from Meta OTA '
@@ -451,6 +454,7 @@ class FlutterPatch {
         downloaded: false,
         nextPatchNumber: check.patch?.number,
         hasResourceChanges: check.patch?.hasResourceChanges,
+        forceUpdate: forceUpdate,
       );
     }
     if (check != null && check.patchAvailable) {
@@ -464,6 +468,7 @@ class FlutterPatch {
           downloaded: false,
           nextPatchNumber: check.patch?.number,
           hasResourceChanges: check.patch?.hasResourceChanges,
+          forceUpdate: forceUpdate,
         );
       }
     }
@@ -487,6 +492,7 @@ class FlutterPatch {
         downloaded: downloaded,
         nextPatchNumber: check?.patch?.number,
         hasResourceChanges: check?.patch?.hasResourceChanges,
+        forceUpdate: forceUpdate,
       );
     } catch (e) {
       onLog?.call('Shorebird unavailable (need shorebird release build): $e');
@@ -495,6 +501,7 @@ class FlutterPatch {
         error: e,
         nextPatchNumber: check?.patch?.number,
         hasResourceChanges: check?.patch?.hasResourceChanges,
+        forceUpdate: forceUpdate,
       );
     }
   }

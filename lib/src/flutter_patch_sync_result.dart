@@ -8,6 +8,7 @@ class FlutterPatchSyncResult {
     this.code,
     this.releaseVersion,
     this.targetPatchNumber,
+    this.forceUpdate = false,
   });
 
   /// Resource-pack sync result; null if resources were skipped.
@@ -21,6 +22,10 @@ class FlutterPatchSyncResult {
 
   /// Patch number whose resource table was (or will be) synced.
   final int? targetPatchNumber;
+
+  /// From patches/check: aggregated mandatory update for the upgrade path.
+  /// When true, hosts should not let users ignore / skip applying the update.
+  final bool forceUpdate;
 
   /// True when a code patch was downloaded and needs a cold start.
   bool get restartRequired => code?.restartRequired ?? false;
@@ -43,6 +48,7 @@ class FlutterPatchCodeResult {
     this.currentPatchNumber,
     this.nextPatchNumber,
     this.hasResourceChanges,
+    this.forceUpdate = false,
     this.downloaded = false,
     this.error,
   });
@@ -55,6 +61,9 @@ class FlutterPatchCodeResult {
 
   /// From patches/check: whether the target patch has resource changes.
   final bool? hasResourceChanges;
+
+  /// From patches/check: aggregated mandatory update for this upgrade path.
+  final bool forceUpdate;
 
   /// True if [ShorebirdUpdater.update] ran successfully this sync.
   final bool downloaded;

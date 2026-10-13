@@ -1,3 +1,9 @@
+## 0.1.7
+
+- Expose aggregated `forceUpdate` on `FlutterPatchSyncResult` /
+  `FlutterPatchCodeResult` from `patches/check` (`force_update`).
+- Depends on `ota_protocol` ^0.1.2.
+
 ## 0.1.3
 
 - Per-patch resource tables: `sync` resolves target patch via `patches/check`, then
